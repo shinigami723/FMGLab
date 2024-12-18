@@ -7,8 +7,8 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.clock import Clock
 import matplotlib.pyplot as plt
-from collections import deque
 import numpy as np
+from collections import deque
 
 # UDP Settings
 UDP_IP = "0.0.0.0"  # Listen to all interfaces
@@ -79,7 +79,8 @@ class ReceiverApp(App):
         self.button_layout.add_widget(BoxLayout())  # Empty box for spacing
         self.start_button = self.create_button("Start Listening")
         self.button_layout.add_widget(self.start_button)
-        self.button_layout.add_widget(self.create_button("Visualize Data"))
+        self.plot_button = self.create_button("Visualize Data")
+        self.button_layout.add_widget(self.plot_button)
         self.button_layout.add_widget(BoxLayout())  # Empty box for spacing
 
         # Add Button Layout to Main Layout
@@ -87,6 +88,9 @@ class ReceiverApp(App):
 
         # Clock for updating the GUI
         Clock.schedule_interval(self.update_labels, 0.5)
+
+        # Clock for periodically updating the plot
+        Clock.schedule_interval(self.update_plot, 1)  # Update the plot every 1 second
 
         return self.layout
 
@@ -121,17 +125,80 @@ class ReceiverApp(App):
 
     def plot_data(self, instance):
         if received_data:
-            plt.clf()
-            for i, label in enumerate(labels[1:9]):  # Plot ADC1 to ADC8
-                plt.plot(np.arange(len(received_data)),
-                         [float(data[i + 1]) for data in received_data], label=label)
+            adc_values = []
+            for data in received_data:
+               adc_values.extend([float(data[i]) for i in range(1, 9)])
+            
+            accel_values = []
+            for data in received_data:
+                accel_values.extend([float(data[i]) for i in range(9, 12)])
 
-            plt.title("Real-Time Sensor Data Visualization")
-            plt.xlabel("Samples")
-            plt.ylabel("Values")
-            plt.legend()
-            plt.grid(True)
+            gyro_values = []
+            for data in received_data:
+                gyro_values.extend([float(data[i]) for i in range(12, 15)])
+
+            # Create figure
+            fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+
+            # Plot ADC values
+            axs[0].plot(np.arange(len(adc_values)), adc_values)
+            axs[0].set_title("ADC Values")
+            axs[0].set_xlabel("Samples")
+            axs[0].set_ylabel("ADC Value")
+
+            # Plot Acceleration values
+            axs[1].plot(np.arange(len(accel_values)), accel_values)
+            axs[1].set_title("Acceleration Values")
+            axs[1].set_xlabel("Samples")
+            axs[1].set_ylabel("Acceleration (g)")
+
+            # Plot Gyroscope values
+            axs[2].plot(np.arange(len(gyro_values)), gyro_values)
+            axs[2].set_title("Gyroscope Values")
+            axs[2].set_xlabel("Samples")
+            axs[2].set_ylabel("Gyroscope (°/s)")
+
+            plt.tight_layout()
             plt.show()
+
+    def update_plot(self, dt):
+        """ Periodically update the plot with the latest data """
+        if received_data:
+            adc_values = []
+            for data in received_data:
+                adc_values.extend([float(data[i]) for i in range(1, 9)])
+            
+            accel_values = []
+            for data in received_data:
+                accel_values.extend([float(data[i]) for i in range(9, 12)])
+
+            gyro_values = []
+            for data in received_data:
+                gyro_values.extend([float(data[i]) for i in range(12, 15)])
+
+            # Create figure
+            fig, axs = plt.subplots(3, 1, figsize=(10, 8))
+
+            # Plot ADC values
+            axs[0].plot(np.arange(len(adc_values)), adc_values)
+            axs[0].set_title("ADC Values")
+            axs[0].set_xlabel("Samples")
+            axs[0].set_ylabel("ADC Value")
+
+            # Plot Acceleration values
+            axs[1].plot(np.arange(len(accel_values)), accel_values)
+            axs[1].set_title("Acceleration Values")
+            axs[1].set_xlabel("Samples")
+            axs[1].set_ylabel("Acceleration (g)")
+
+            # Plot Gyroscope values
+            axs[2].plot(np.arange(len(gyro_values)), gyro_values)
+            axs[2].set_title("Gyroscope Values")
+            axs[2].set_xlabel("Samples")
+            axs[2].set_ylabel("Gyroscope (°/s)")
+
+            plt.tight_layout()
+            plt.draw()
 
 # Run the app
 if __name__ == "__main__":
