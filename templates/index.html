@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Data Visualization</title>
+    <script src="../node_modules/chart.js/dist/chart.umd.js"></script>
+    <script src="../node_modules/sockjs-client/dist/sockjs.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(120deg, #f8f9fa, #e9ecef);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+
+        .charts-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 10px;
+            height: calc(100vh - 60px);
+            padding: 10px;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            overflow: hidden;
+        }
+
+        .large-chart {
+            grid-row: span 2;
+        }
+
+        canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-Time Data Visualization</h1>
+    <div class="charts-container">
+        <!-- ADC Graph -->
+        <div class="chart-container large-chart">
+            <canvas id="adcChart"></canvas>
+        </div>
+
+        <!-- Acceleration Graph -->
+        <div class="chart-container">
+            <canvas id="accelChart"></canvas>
+        </div>
+
+        <!-- Rotation Graph -->
+        <div class="chart-container">
+            <canvas id="rotationChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const sock = new SockJS("http://192.168.0.101:5000/sockjs");
+        sock.onopen = function() { 
+            console.log('Successfully connected to the server'); 
+        }; 
+        
+        sock.onmessage = function(e) { 
+            const data = JSON.parse(e.data); 
+            const { counter, adc, acceleration, rotation } = data; 
+            adcBuffer.push({ counter, values: adc }); 
+            accelBuffer.push({ counter, values: acceleration }); 
+            rotationBuffer.push({ counter, values: rotation }); 
+        }; 
+        
+        sock.onclose = function() { 
+            console.log('Connection closed'); 
+        };
+
+        const maxVisiblePoints = 200;
+        const updateInterval = 100;
+        const adcBuffer = [];
+        const accelBuffer = [];
+        const rotationBuffer = [];
+
+        function createDataset(label, color) {
+            return {
+                label: label,
+                data: [],
+                borderColor: color,
+                backgroundColor: 'rgba(0, 0, 0, 0)',
+                borderWidth: 2,
+                tension: 0.4,
+                pointRadius: 0
+            };
+        }
+
+        function createChartOptions(xLabel, yLabel) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: {
+                            color: '#333',
+                            font: { size: 14 }
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        cornerRadius: 6
+                    }
+                },
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: xLabel,
+                            color: '#555',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        grid: { color: 'rgba(220, 220, 220, 0.3)' },
+                        ticks: { color: '#333' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: yLabel,
+                            color: '#555',
+                            font: { size: 14, weight: 'bold' }
+                        },
+                        grid: { color: 'rgba(220, 220, 220, 0.3)' },
+                        ticks: { color: '#333' }
+                    }
+                }
+            };
+        }
+
+        const ctxAdc = document.getElementById('adcChart').getContext('2d');
+        const adcDatasets = Array(8).fill().map((_, i) => 
+            createDataset(`ADC ${i + 1}`, `hsl(${i * 45}, 80%, 60%)`)
+        );
+
+        const ctxAccel = document.getElementById('accelChart').getContext('2d');
+        const accelDatasets = [
+            createDataset("Acceleration X", "rgba(255, 99, 132, 1)"),
+            createDataset("Acceleration Y", "rgba(54, 162, 235, 1)"),
+            createDataset("Acceleration Z", "rgba(75, 192, 192, 1)")
+        ];
+
+        const ctxRotation = document.getElementById('rotationChart').getContext('2d');
+        const rotationDatasets = [
+            createDataset("Rotation X", "rgba(153, 102, 255, 1)"),
+            createDataset("Rotation Y", "rgba(255, 159, 64, 1)"),
+            createDataset("Rotation Z", "rgba(255, 205, 86, 1)")
+        ];
+
+        const adcChart = new Chart(ctxAdc, {
+            type: 'line',
+            data: { labels: [], datasets: adcDatasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              plugins: {
+                legend: { display: true
+                },
+              },
+              scales: {
+                x: {
+                  title: { display: true, text: "Time (s)"}
+                },
+                y: {
+                  title: { display: true, text: "ADC Value (V)"},
+                  min: 0,
+                  max: 5
+                }
+              }
+            }
+        });
+
+        const accelChart = new Chart(ctxAccel, {
+            type: 'line',
+            data: { labels: [], datasets: accelDatasets },
+            options: createChartOptions("Time (s)", "Acceleration (g)")
+        });
+
+        const rotationChart = new Chart(ctxRotation, {
+            type: 'line',
+            data: { labels: [], datasets: rotationDatasets },
+            options: createChartOptions("Time (s)", "Rotation (°/s)")
+        });
+
+        function updateChart(chart, buffer, maxVisiblePoints) {
+            if (buffer.length > 0) {
+                buffer.forEach(({ counter, values }) => {
+                    chart.data.labels.push(counter);
+                    chart.data.datasets.forEach((dataset, index) => {
+                        dataset.data.push(values[index]);
+                    });
+                    if (chart.data.labels.length > maxVisiblePoints) {
+                        chart.data.labels.shift();
+                        chart.data.datasets.forEach(dataset => dataset.data.shift());
+                    }
+                });
+                buffer.length = 0;
+                chart.update();
+            }
+        }
+
+        setInterval(() => {
+            updateChart(adcChart, adcBuffer, maxVisiblePoints);
+            updateChart(accelChart, accelBuffer, maxVisiblePoints);
+            updateChart(rotationChart, rotationBuffer, maxVisiblePoints);
+        }, updateInterval);
+
+        function updateChart(chart, buffer, maxVisiblePoints) { 
+            if (buffer.length > 0) { 
+                buffer.forEach(({ counter, values }) => { 
+                    chart.data.labels.push(counter); 
+                    chart.data.datasets.forEach((dataset, index) => { 
+                        dataset.data.push(values[index]); 
+                    }); 
+                    if (chart.data.labels.length > maxVisiblePoints) { 
+                        chart.data.labels.shift(); 
+                        chart.data.datasets.forEach(dataset => dataset.data.shift()); 
+                    } 
+                }); 
+                buffer.length = 0; 
+                chart.update(); 
+            } 
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "my-electron-app",
+  "version": "1.0.0",
+  "description": "A real-time FMG data visualization and recording app",
+  "main": "main.js",
+  "author": {
+    "name": "Shubham_GOD",
+    "email": "shubham.07k@outlook.com"
+  },
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "chart.js": "^4.4.7",
+    "electron": "^33.2.1",
+    "express": "^4.21.2",
+    "sockjs-client": "^1.6.1",
+    "tree-kill": "^1.2.2"
+  },
+  "devDependencies": {
+    "electron-builder": "^25.1.8",
+    "electron-packager": "^17.1.2"
+  }
+}
