@@ -1,163 +1,214 @@
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QLabel, QComboBox
+)
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import QUrl, QThread, pyqtSignal
+import os
 import sys
 import asyncio
-import threading
-import struct
+from qasync import QEventLoop
 from bleak import BleakScanner, BleakClient
-from PyQt5.QtWidgets import (
-    QApplication, QVBoxLayout, QPushButton, QLabel, QComboBox, QWidget, QHBoxLayout
-)
-from PyQt5.QtCore import QTimer
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from collections import deque
+import nest_asyncio
 
-# BLE UUIDs
-CHARACTERISTIC_UUID_ADC = "12345678-1234-5678-1234-56789abcdef1"
-CHARACTERISTIC_UUID_ACCEL = "12345678-1234-5678-1234-56789abcdef2"
-CHARACTERISTIC_UUID_ROT = "12345678-1234-5678-1234-56789abcdef3"
+# Allow nested asyncio event loops
+nest_asyncio.apply()
 
-class BLEApp(QWidget):
+class BluetoothScanner(QThread):
+    devices_found = pyqtSignal(list)
+    error_occurred = pyqtSignal(str)
+
+    async def scan(self):
+        try:
+            devices = await BleakScanner.discover()
+            device_list = [(device.name or "Unknown", device.address) for device in devices]
+            self.devices_found.emit(device_list)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+    def run(self):
+        asyncio.run(self.scan())
+
+class BluetoothConnector(QThread):
+    connected = pyqtSignal(bool, str)
+
+    def __init__(self, device_addr):
+        super().__init__()
+        self.device_addr = device_addr
+        self.client = None
+
+    async def connect_to_device(self):
+        try:
+            self.client = BleakClient(self.device_addr)
+            await self.client.connect()
+            if self.client.is_connected:
+                self.connected.emit(True, f"Connected to {self.device_addr}")
+            else:
+                self.connected.emit(False, "Connection failed.")
+        except Exception as e:
+            self.connected.emit(False, f"Connection error: {str(e)}")
+
+    def run(self):
+        asyncio.run(self.connect_to_device())
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.init_ui()
-        self.devices = []
+        self.setWindowTitle("Real-Time Data Visualization with Bluetooth")
+        self.setGeometry(100, 100, 1200, 800)
+
+        self.is_recording = False
         self.client = None
-        self.recording = False
-        self.data_file = None
 
-        # Data Buffers
-        self.adc_data = deque(maxlen=100)
-        self.accel_data = deque(maxlen=100)
-        self.rot_data = deque(maxlen=100)
+        # UI Components
+        self.setup_ui()
 
-        # Timer for updating graphs
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_graphs)
+        # Bluetooth Scanner
+        self.bt_scanner = BluetoothScanner()
+        self.bt_scanner.devices_found.connect(self.update_device_list)
+        self.bt_scanner.error_occurred.connect(self.handle_scan_error)
 
-    def init_ui(self):
-        self.setWindowTitle("BLE Sensor App")
-        self.setGeometry(100, 100, 800, 600)
+    def setup_ui(self):
+        self.browser = QWebEngineView()
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        html_path = os.path.join(base_path, "index.html")
+        self.browser.setUrl(QUrl.fromLocalFile(html_path))
 
-        # Layouts
-        layout = QVBoxLayout()
-        button_layout = QHBoxLayout()
+        self.scan_button = QPushButton("Scan Bluetooth")
+        self.scan_button.clicked.connect(self.scan_bluetooth)
 
-        # Device selection
-        self.device_label = QLabel("Devices:")
-        self.device_list = QComboBox()
-        self.scan_button = QPushButton("Scan")
-        self.scan_button.clicked.connect(self.scan_devices)
-
-        # Connect Button
         self.connect_button = QPushButton("Connect")
+        self.connect_button.setEnabled(False)
         self.connect_button.clicked.connect(self.connect_device)
 
-        # Recording Button
+        self.device_selector = QComboBox()
+        self.device_selector.setEnabled(False)
+
+        self.status_label = QLabel("Status: Disconnected")
+
         self.record_button = QPushButton("Start Recording")
+        self.record_button.setEnabled(False)
         self.record_button.clicked.connect(self.toggle_recording)
 
-        # Add widgets to layout
-        button_layout.addWidget(self.device_label)
-        button_layout.addWidget(self.device_list)
+        button_layout = QHBoxLayout()
         button_layout.addWidget(self.scan_button)
+        button_layout.addWidget(self.device_selector)
         button_layout.addWidget(self.connect_button)
         button_layout.addWidget(self.record_button)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.browser)
         layout.addLayout(button_layout)
+        layout.addWidget(self.status_label)
 
-        # Real-time Graphs
-        self.fig, self.ax = plt.subplots(3, 1, figsize=(8, 6))
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
 
-        self.setLayout(layout)
+    def scan_bluetooth(self):
+        self.status_label.setText("Status: Scanning...")
+        self.device_selector.setEnabled(False)
+        self.device_selector.clear()
+        self.bt_scanner.start()
 
-    def scan_devices(self):
-        asyncio.run_coroutine_threadsafe(self.async_scan_devices(), asyncio.get_event_loop())
+    def handle_scan_error(self, error_message):
+        self.status_label.setText(f"Status: Scan Error - {error_message}")
 
-    async def async_scan_devices(self):
-        self.devices = await BleakScanner.discover()
-        self.device_list.clear()
-        for device in self.devices:
-            if device.name:
-                self.device_list.addItem(device.name)
+    def update_device_list(self, devices):
+        self.status_label.setText("Status: Scan Complete")
+        self.device_selector.setEnabled(True)
+        self.device_selector.addItem("Select Device")
+        for name, addr in devices:
+            self.device_selector.addItem(f"{name} ({addr})")
+
+        self.connect_button.setEnabled(True)
 
     def connect_device(self):
-        if not self.devices:
-            self.connect_button.setText("No Devices Found")
+        selection = self.device_selector.currentText()
+        if selection == "Select Device":
+            self.status_label.setText("Status: No device selected.")
             return
 
-        selected_name = self.device_list.currentText()
-        for device in self.devices:
-            if device.name == selected_name:
-                asyncio.run_coroutine_threadsafe(self.async_connect_device(device), asyncio.get_event_loop())
-                return
+        device_addr = selection.split("(")[-1].strip(")")
+        self.status_label.setText(f"Status: Connecting to {device_addr}...")
 
-    async def async_connect_device(self, device):
-        try:
-            self.client = BleakClient(device)
-            await self.client.connect()
-            self.connect_button.setText("Connected")
-        except Exception as e:
-            self.connect_button.setText("Connection Failed")
-            print(e)
+        self.connector = BluetoothConnector(device_addr)
+        self.connector.connected.connect(self.on_device_connected)
+        self.connector.start()
+
+    def on_device_connected(self, success, message):
+        self.status_label.setText(f"Status: {message}")
+        if success:
+            self.connect_button.setEnabled(False)
+            self.record_button.setEnabled(True)
+            self.client = self.connector.client
 
     def toggle_recording(self):
-        if not self.client:
-            self.record_button.setText("Connect First")
+        if not self.client or not self.client.is_connected:
+            self.status_label.setText("Status: No device connected.")
             return
 
-        if self.recording:
-            self.recording = False
-            self.record_button.setText("Start Recording")
-            self.data_file.close()
-            self.timer.stop()
-        else:
-            self.recording = True
+        if not self.is_recording:
+            self.is_recording = True
             self.record_button.setText("Stop Recording")
-            self.data_file = open("sensor_data.txt", "w")
-            self.timer.start(100)
-            asyncio.run_coroutine_threadsafe(self.async_receive_data(), asyncio.get_event_loop())
+            self.status_label.setText("Status: Recording...")
+            asyncio.create_task(self.record_data())
+        else:
+            self.is_recording = False
+            self.record_button.setText("Start Recording")
+            self.status_label.setText("Status: Recording stopped.")
 
-    async def async_receive_data(self):
+    async def record_data(self):
+        adc_uuid = "12345678-1234-5678-1234-56789abcdef1"
+        accel_uuid = "12345678-1234-5678-1234-56789abcdef2"
+        rot_uuid = "12345678-1234-5678-1234-56789abcdef3"
+
         try:
-            while self.recording:
-                adc_raw = await self.client.read_gatt_char(CHARACTERISTIC_UUID_ADC)
-                accel_raw = await self.client.read_gatt_char(CHARACTERISTIC_UUID_ACCEL)
-                rot_raw = await self.client.read_gatt_char(CHARACTERISTIC_UUID_ROT)
+            with open("recorded_data.txt", "w") as file:
+                while self.is_recording:
+                    if not self.client.is_connected:
+                        self.status_label.setText("Status: Device disconnected. Reconnecting...")
+                        try:
+                            await self.client.connect()
+                            if not self.client.is_connected:
+                                raise Exception("Reconnection failed.")
+                            self.status_label.setText("Status: Reconnected.")
+                        except Exception as reconnect_error:
+                            self.status_label.setText(f"Status: Reconnection error - {str(reconnect_error)}")
+                            self.is_recording = False
+                            break
 
-                adc = struct.unpack('8h', adc_raw)
-                accel = struct.unpack('3h', accel_raw)
-                rot = struct.unpack('3h', rot_raw)
+                    try:
+                        # Attempt to read data
+                        adc_data = await self.client.read_gatt_char(adc_uuid)
+                        accel_data = await self.client.read_gatt_char(accel_uuid)
+                        rot_data = await self.client.read_gatt_char(rot_uuid)
 
-                self.adc_data.append(adc)
-                self.accel_data.append(accel)
-                self.rot_data.append(rot)
+                        # Convert the binary data to integers (assuming little-endian format)
+                        adc_values = list(int.from_bytes(adc_data[i:i+2], byteorder='little', signed=True) for i in range(0, len(adc_data), 2))
+                        accel_values = list(int.from_bytes(accel_data[i:i+2], byteorder='little', signed=True) for i in range(0, len(accel_data), 2))
+                        rot_values = list(int.from_bytes(rot_data[i:i+2], byteorder='little', signed=True) for i in range(0, len(rot_data), 2))
 
-                # Save to file
-                self.data_file.write(",".join(map(str, adc + accel + rot)) + "\n")
+                        # Write to file
+                        file.write(f"{adc_values},{accel_values},{rot_values}\n")
+                        file.flush()
+
+                        print(f"{adc_values}, {accel_values}, {rot_values}")
+                    except Exception as read_error:
+                        self.status_label.setText(f"Status: Read error - {str(read_error)}")
+                        await asyncio.sleep(2)  # Add a short delay before retrying
+
+                    await asyncio.sleep(1)  # Adjust delay to avoid overwhelming the BLE device
         except Exception as e:
-            print(f"Data reception error: {e}")
-
-    def update_graphs(self):
-        self.ax[0].cla()
-        self.ax[0].plot([x[0] for x in self.adc_data])
-        self.ax[0].set_title("ADC Data")
-
-        self.ax[1].cla()
-        self.ax[1].plot([x[0] for x in self.accel_data])
-        self.ax[1].set_title("Acceleration Data")
-
-        self.ax[2].cla()
-        self.ax[2].plot([x[0] for x in self.rot_data])
-        self.ax[2].set_title("Rotation Data")
-
-        self.canvas.draw()
+            self.status_label.setText(f"Status: Error during recording - {str(e)}")
+            self.is_recording = False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    loop = asyncio.new_event_loop()
+    loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
-    threading.Thread(target=loop.run_forever, daemon=True).start()
-    window = BLEApp()
-    window.show()
-    sys.exit(app.exec_())
+
+    main_window = MainWindow()
+    main_window.show()
+
+    with loop:
+        sys.exit(loop.run_forever())
